@@ -1,7 +1,6 @@
-// Telegram Bot API base URL
 const TELEGRAM_API_BASE = 'https://api.telegram.org';
+const BACKEND_WEBHOOK_URL = '{{backend_url}}/api/telegram/webhook';
 
-// HTML template for documentation
 const DOC_HTML = `<!DOCTYPE html>
 <html>
 <head>
@@ -41,58 +40,61 @@ const DOC_HTML = `<!DOCTYPE html>
 </head>
 <body>
     <h1>Telegram Bot API Proxy</h1>
-    <p>This service acts as a transparent proxy for the Telegram Bot API. It allows you to bypass network restrictions and create middleware for your Telegram bot applications.</p>
-    
-    <h2>How to Use</h2>
-    <p>Replace <code>api.telegram.org</code> with this worker's URL in your API calls.</p>
-    
+    <p>This service acts as a transparent proxy for the Telegram Bot API and a webhook receiver for Telegram updates.</p>
+
+    <h2>Usage</h2>
     <div class="example">
-        <h3>Example Usage:</h3>
-        <p>Original Telegram API URL:</p>
-        <div class="code">https://api.telegram.org/bot{YOUR_BOT_TOKEN}/sendMessage</div>
-        <p>Using this proxy:</p>
+        <h3>Telegram API Proxy:</h3>
         <div class="code">https://{YOUR_WORKER_URL}/bot{YOUR_BOT_TOKEN}/sendMessage</div>
-    </div>
-
-    <h2>Features</h2>
-    <ul>
-        <li>Supports all Telegram Bot API methods</li>
-        <li>Handles both GET and POST requests</li>
-        <li>Full CORS support for browser-based applications</li>
-        <li>Transparent proxying of responses</li>
-        <li>Maintains original status codes and headers</li>
-    </ul>
-
-    <div class="note">
-        <strong>Note:</strong> This proxy does not store or modify your bot tokens. All requests are forwarded directly to Telegram's API servers.
-    </div>
-
-    <h2>Example Code</h2>
-    <div class="code">
-// JavaScript Example
-fetch('https://{YOUR_WORKER_URL}/bot{YOUR_BOT_TOKEN}/sendMessage', {
-    method: 'POST',
-    headers: {
-        'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-        chat_id: "123456789",
-        text: "Hello from Telegram Bot API Proxy!"
-    })
-})
-.then(response => response.json())
-.then(data => console.log(data));
+        <h3>Telegram Webhook Endpoint:</h3>
+        <div class="code">https://{YOUR_WORKER_URL}/webhook</div>
     </div>
 </body>
 </html>`;
 
-async function handleRequest(request) {
-  // Clone the request to modify it
-  const requestClone = new Request(request);
-  const url = new URL(request.url);
+addEventListener('fetch', event => {
+  const request = event.request;
 
-  // If accessing the root path, show documentation
-  if (url.pathname === '/' || url.pathname === '') {
+  if (request.method === 'OPTIONS') {
+    event.respondWith(handleOptions());
+  } else {
+    event.respondWith(handleRequest(request));
+  }
+});
+
+function handleOptions() {
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Max-Age': '86400',
+  };
+  return new Response(null, { status: 204, headers: corsHeaders });
+}
+
+async function handleRequest(request) {
+  const url = new URL(request.url);
+  const pathname = url.pathname;
+  console.log(pathname);
+  // 🧩 1. Handle Telegram webhook
+  if (request.method === 'POST' && pathname === '/webhook') {
+    try {
+      const rawBody = await request.text();
+      await fetch(BACKEND_WEBHOOK_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': request.headers.get('Content-Type') || 'application/json',
+        },
+        body: rawBody,
+      });
+      return new Response('Webhook received and forwarded', { status: 200 });
+    } catch (err) {
+      return new Response('Error forwarding webhook', { status: 200 });
+    }
+  }
+
+  // 🧩 2. Serve documentation
+  if (pathname === '/' || pathname === '') {
     return new Response(DOC_HTML, {
       headers: {
         'Content-Type': 'text/html;charset=UTF-8',
@@ -101,74 +103,35 @@ async function handleRequest(request) {
     });
   }
 
-  // Extract the bot token and method from the URL path
-  // Expected format: /bot{token}/{method}
-  const pathParts = url.pathname.split('/').filter(Boolean);
-  
+  // 🧩 3. Proxy to Telegram API
+  const pathParts = pathname.split('/').filter(Boolean);
   if (pathParts.length < 2 || !pathParts[0].startsWith('bot')) {
     return new Response('Invalid bot request format', { status: 400 });
   }
 
-  // Reconstruct the Telegram API URL
-  const telegramUrl = new URL(
-    `${TELEGRAM_API_BASE}${url.pathname}${url.search}`
-  );
-
-  // Create headers for the new request
-  const headers = new Headers(request.headers);
-  
-  // Forward the request to Telegram API
-  const telegramRequest = new Request(telegramUrl, {
-    method: requestClone.method,
-    headers: headers,
-    body: requestClone.method !== 'GET' ? await request.clone().arrayBuffer() : undefined,
+  const telegramUrl = `${TELEGRAM_API_BASE}${pathname}${url.search}`;
+  const proxyRequest = new Request(telegramUrl, {
+    method: request.method,
+    headers: request.headers,
+    body: request.method !== 'GET' ? await request.arrayBuffer() : undefined,
     redirect: 'follow',
   });
 
   try {
-    const response = await fetch(telegramRequest);
-    
-    // Create a new response with the Telegram API response
-    const newResponse = new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
+    const telegramResponse = await fetch(proxyRequest);
+    const responseBody = await telegramResponse.arrayBuffer();
+
+    const responseHeaders = new Headers(telegramResponse.headers);
+    responseHeaders.set('Access-Control-Allow-Origin', '*');
+    responseHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    responseHeaders.set('Access-Control-Allow-Headers', 'Content-Type');
+
+    return new Response(responseBody, {
+      status: telegramResponse.status,
+      statusText: telegramResponse.statusText,
+      headers: responseHeaders,
     });
-
-    // Add CORS headers to allow requests from any origin
-    newResponse.headers.set('Access-Control-Allow-Origin', '*');
-    newResponse.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    newResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type');
-
-    return newResponse;
   } catch (error) {
     return new Response(`Error proxying request: ${error.message}`, { status: 500 });
   }
 }
-
-// Handle OPTIONS requests for CORS
-function handleOptions(request) {
-  const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Max-Age': '86400',
-  };
-
-  return new Response(null, {
-    status: 204,
-    headers: corsHeaders,
-  });
-}
-
-// Main event listener for the worker
-addEventListener('fetch', event => {
-  const request = event.request;
-  
-  // Handle CORS preflight requests
-  if (request.method === 'OPTIONS') {
-    event.respondWith(handleOptions(request));
-  } else {
-    event.respondWith(handleRequest(request));
-  }
-}); 
