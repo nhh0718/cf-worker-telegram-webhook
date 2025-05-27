@@ -23,7 +23,7 @@ Chạy trên Cloudflare Worker, đơn giản hoạt động như một proxy cho
 
 ## Cài đặt
 
-1. Tải file này:
+1. Copy nội dung file này:
    ```bash
       telegram-bot-proxy.js
    ```
@@ -36,6 +36,10 @@ Chạy trên Cloudflare Worker, đơn giản hoạt động như một proxy cho
 
 Thay thế `api.telegram.org` bằng URL của worker trong các API calls của bạn:
 
+Nếu muốn đổi từ nhận updates từ polling => webhook thì call API tạo webhook: 
+```
+curl --location --request POST 'https://api.telegram.org/bot<TOKEN>/setWebhook?url={{workers_url}}/webhook'
+```
 URL Telegram API gốc:
 ```
 https://api.telegram.org/bot{TOKEN_BOT_CỦA_BẠN}/sendMessage
